@@ -1,0 +1,186 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: PDF Tools Backend - Session and Merge Services
+
+Parameters:
+  ServiceName:
+    Type: String
+    Default: pdftools
+    Description: Prefix for naming resources (API/Lambdas) and optional URL base path.
+
+  StageName:
+    Type: String
+    Default: v1
+    Description: API Gateway stage name (appears in execute-api URL).
+
+  ApiName:
+    Type: String
+    Default: "PDFTools"
+    Description: Optional explicit API name. Leave empty to auto-generate from ServiceName + StageName.
+
+  FunctionNamePrefix:
+    Type: String
+    Default: "PDFTools"
+    Description: Optional explicit prefix for Lambda FunctionName. Leave empty to auto-generate.
+
+  UseVersionInPath:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "true"
+    Description: If true, routes will be /{ServiceName}/{StageName}/... else /{ServiceName}/...
+
+Conditions:
+  HasApiName: !Not [!Equals [!Ref ApiName, ""]]
+  HasFnPrefix: !Not [!Equals [!Ref FunctionNamePrefix, ""]]
+  VersionInPath: !Equals [!Ref UseVersionInPath, "true"]
+
+Globals:
+  Function:
+    Timeout: 30
+    Runtime: python3.12
+    MemorySize: 128
+    Architectures:
+      - x86_64
+
+Resources:
+  PdfToolsApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !If
+        - HasApiName
+        - !Ref ApiName
+        - !Sub "${ServiceName}-${StageName}-api"
+      StageName: !Ref StageName
+      Cors:
+        AllowOrigin: "'*'"
+        AllowMethods: "'OPTIONS,POST'"
+        AllowHeaders: "'Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Amz-Security-Token'"
+
+  SessionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !If
+        - HasFnPrefix
+        - !Sub "${FunctionNamePrefix}-session"
+        - !Sub "${ServiceName}-${StageName}-session"
+      CodeUri: src/pdftools_session/
+      Handler: handler.lambda_handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+      Role: !GetAtt SessionFunctionRole.Arn
+      Events:
+        CreateSession:
+          Type: Api
+          Properties:
+            RestApiId: !Ref PdfToolsApi
+            Path: /pdftools/v1/session
+            Method: get
+
+
+  MergeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !If
+        - HasFnPrefix
+        - !Sub "${FunctionNamePrefix}-merge"
+        - !Sub "${ServiceName}-${StageName}-merge"
+      CodeUri: src/pdftools_merge/
+      Handler: handler.lambda_handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+      Role: !GetAtt SessionFunctionRole.Arn
+      Events:
+        MergePdf:
+          Type: Api
+          Properties:
+            RestApiId: !Ref PdfToolsApi
+            Path: /pdftools/v1/merge
+            Method: post
+
+  PdfToolsSessionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: "omnirole-pdftools"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: sessionId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: sessionId
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  PdfToolsUploadsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: "omnirole-pdftools" 
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      CorsConfiguration:
+        CorsRules:
+          - AllowedMethods: [PUT, POST, GET, HEAD]
+            AllowedOrigins: ["*"]
+            AllowedHeaders: ["*"]
+            ExposedHeaders: ["ETag"]
+            MaxAge: 3000
+
+  SessionFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: omnirole-pdftools-session-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DynamoDbAndS3AccessOmnirolePdftools
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource:
+                  - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/omnirole-pdftools"
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource:
+                  - "arn:aws:s3:::omnirole-pdftools/sessions/*"
+Outputs:
+  ApiBaseUrl:
+    Description: API Gateway base URL (execute-api includes stage)
+    Value: !Sub "https://${PdfToolsApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}"
+
+  SessionUrl:
+    Description: Session endpoint URL
+    Value: !If
+      - VersionInPath
+      - !Sub "https://${PdfToolsApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}/${ServiceName}/${StageName}/session"
+      - !Sub "https://${PdfToolsApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}/${ServiceName}/session"
+
+  MergeUrl:
+    Description: Merge endpoint URL
+    Value: !If
+      - VersionInPath
+      - !Sub "https://${PdfToolsApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}/${ServiceName}/${StageName}/merge"
+      - !Sub "https://${PdfToolsApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}/${ServiceName}/merge"

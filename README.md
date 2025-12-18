@@ -1,2 +1,26 @@
-# PDF-Tools
-A privacy-first automation suite for working with PDFs: convert images to PDF, merge/split, edit, compress, and share files via clean APIs and a simple UI. Built for speed, reliability, and easy self-hosting.
+# PDF Tools Backend
+
+Python repository for PDF processing tools.
+
+## Prerequisites
+
+* [AWS CLI](https://aws.amazon.com/cli/)
+* [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html)
+
+## Build and Deploy
+
+### Build
+```bash
+./scripts/build.sh
+```
+
+### Deploy to Dev
+```bash
+./scripts/deploy-dev.sh
+```
+
+### Deploy to Prod
+```bash
+./scripts/deploy-prod.sh
+```
+
